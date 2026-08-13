@@ -1,0 +1,10 @@
+---
+# RHEL-family uses the `wheel` group for sudo; Debian uses `sudo`.
+# `ansible_os_family` is a gathered fact, so one role handles both distros.
+- name: Set admin group per OS family
+  ansible.builtin.set_fact:
+    admin_group: "{{ 'wheel' if ansible_facts['os_family'] == 'RedHat' else 'sudo' }}" # noqa: var-naming[no-role-prefix]
+
+- name: Show admin group
+  ansible.builtin.debug:
+    var: admin_group

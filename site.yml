@@ -1,0 +1,7 @@
+---
+- name: Provision the Elasticsearch cluster + Kibana + Apache
+  hosts: servers
+  become: true
+  roles:
+    - role: common
+      tags: [common, base]
