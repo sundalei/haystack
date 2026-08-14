@@ -5,3 +5,6 @@
   roles:
     - role: common
       tags: [common, base]
+
+    - role: wireguard
+      tags: [wireguard, network]

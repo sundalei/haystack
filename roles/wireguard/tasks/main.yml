@@ -1,0 +1,8 @@
+---
+# Idemponent WireGuard mesh between the two nodes over their public IPs.
+# Keys are generated on each host once and public keys exchanged via hostvars.
+
+- name: Install WireGuard
+  ansible.builtin.package:
+    name: "{{ 'wireguard-tools' if ansible_facts['os_family'] == 'RedHat' else 'wireguard' }}"
+    state: present

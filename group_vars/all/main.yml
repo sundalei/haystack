@@ -1,0 +1,5 @@
+---
+# --- Non-secret configuration (secrets live in vault.yml) ---
+
+# Admin user created on every host
+admin_user: "dalei"

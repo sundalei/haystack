@@ -5,6 +5,84 @@
   ansible.builtin.set_fact:
     admin_group: "{{ 'wheel' if ansible_facts['os_family'] == 'RedHat' else 'sudo' }}" # noqa: var-naming[no-role-prefix]
 
-- name: Show admin group
-  ansible.builtin.debug:
-    var: admin_group
+- name: Ensure the admin group exists
+  ansible.builtin.group:
+    name: "{{ admin_group }}"
+    state: present
+
+- name: Create the admin user
+  ansible.builtin.user:
+    name: "{{ admin_user }}"
+    groups:
+      - "{{ admin_group }}"
+    append: true
+    shell: /bin/bash
+    create_home: true
+    state: present
+    password: "{{ admin_password }}"
+
+- name: Deploy admin user SSH public key
+  ansible.posix.authorized_key:
+    user: "{{ admin_user }}"
+    key: "{{ admin_ssh_public_key }}"
+    manage_dir: true
+    exclusive: true
+  when: admin_ssh_public_key is defined
+
+- name: Grant passwordless sudo via a validated drop-in
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/{{ admin_user }}"
+    content: "{{ admin_user }} ALL=(ALL) NOPASSWD: ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s" # %s = the temp file Ansible stages before install
+
+- name: Ensure vm.max_map_count for Elasticsearch (bootstrap check)
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: "262144"
+    sysctl_file: /etc/sysctl.d/99-elasticsearch.conf
+    state: present
+    reload: true
+
+# Debian package lists are empty on a freshly provisioned host until apt-get
+# update runs, which makes `package` report "No package matching '...'".
+# Refresh the cache first (cache_valid_time avoids re-hitting mirrors every run).
+- name: Update apt cache (Debian)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Base packages (per OS family)
+  ansible.builtin.package:
+    name: "{{ base_packages }}"
+    state: present
+  vars:
+    base_packages: >-
+      {{ ['curl', 'unzip', 'firewalld'] if ansible_facts['os_family'] == 'RedHat'
+         else ['curl', 'unzip', 'ufw'] }}
+
+# --- Firewall baseline ---
+# RedHat: firewalld is the default and SSH is already allowed; just ensure it runs.
+- name: Ensure firewalld is enabled (RedHat)
+  ansible.builtin.systemd:
+    name: firewalld
+    enabled: true
+    state: started
+  when: ansible_facts['os_family'] == 'RedHat'
+
+# `ufw enable` with a default-deny policy will cut your SSH session if 22 isn't already allowed.
+# Always allow OpenSSH, then enable.
+- name: Allow SSH through ufw (Debian)
+  community.general.ufw:
+    rule: allow
+    name: OpenSSH
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Enable ufw (Debian)
+  community.general.ufw:
+    state: enabled
+    policy: deny
+  when: ansible_facts['os_family'] == 'Debian'
