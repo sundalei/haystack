@@ -3,3 +3,7 @@
 
 # Admin user created on every host
 admin_user: "dalei"
+
+# WireGuard private network
+wg_port: 51820
+wg_interface: "wg0"

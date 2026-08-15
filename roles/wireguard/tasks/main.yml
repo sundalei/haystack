@@ -37,3 +37,27 @@
     wg_private_key: "{{ wg_priv_slurp.content | b64decode | trim }}" # noqa: var-naming[no-role-prefix]
     wg_public_key: "{{ wg_pub_slurp.content | b64decode | trim }}" # noqa: var-naming[no-role-prefix]
   no_log: true
+
+- name: Open the WireGuard UDP port (firewalld / RedHat)
+  ansible.posix.firewalld:
+    port: "{{ wg_port }}/udp"
+    permanent: true
+    immediate: true
+    state: enabled
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Open the WireGuard UDP port (ufw / Debian)
+  community.general.ufw:
+    rule: allow
+    port: "{{ wg_port }}"
+    proto: udp
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Render wg0.conf
+  ansible.builtin.template:
+    src: wg0.conf.j2
+    dest: "/etc/wireguard/{{ wg_interface }}.conf"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart wireguard
