@@ -1,0 +1,4 @@
+---
+# es2 - Ubuntu: data node only.
+wg_ip: "10.10.0.2"
+wg_public_endpoint: "31.97.136.158" # this node's PUBLIC ip (peer dials this)

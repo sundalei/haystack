@@ -1,0 +1,4 @@
+---
+# es1 - AlmaLinux: cluster primary, hosts Kibana + Apache, and is the cert authority.
+wg_ip: "10.10.0.1"
+wg_public_endpoint: "187.77.1.89" # this node's PUBLIC ip (peer dials this)
