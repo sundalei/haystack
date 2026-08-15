@@ -6,3 +6,34 @@
   ansible.builtin.package:
     name: "{{ 'wireguard-tools' if ansible_facts['os_family'] == 'RedHat' else 'wireguard' }}"
     state: present
+
+- name: Generate private key (once)
+  ansible.builtin.shell: "umask 077; wg genkey > /etc/wireguard/privatekey"
+  args:
+    # Turns private key creation idemponent
+    creates: /etc/wireguard/privatekey
+
+- name: Derive public key (once)
+  ansible.builtin.shell: "wg pubkey < /etc/wireguard/privatekey > /etc/wireguard/publickey"
+  args:
+    # Turns public key derivation idemponent
+    creates: /etc/wireguard/publickey
+
+- name: Read this host's private key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/privatekey
+  register: wg_priv_slurp # noqa: var-naming[no-role-prefix]
+  no_log: true
+
+- name: Read this host's public key
+  ansible.builtin.slurp:
+    src: /etc/wireguard/publickey
+  register: wg_pub_slurp # noqa: var-naming[no-role-prefix]
+
+# `slurp` returns file contents base64-encoded, so we decode. Setting these as
+# facts makes them readable as hostvars[other_host].wg_public_key from other host
+- name: Public keys as facts (public shared to peers; private stays local)
+  ansible.builtin.set_fact:
+    wg_private_key: "{{ wg_priv_slurp.content | b64decode | trim }}" # noqa: var-naming[no-role-prefix]
+    wg_public_key: "{{ wg_pub_slurp.content | b64decode | trim }}" # noqa: var-naming[no-role-prefix]
+  no_log: true
