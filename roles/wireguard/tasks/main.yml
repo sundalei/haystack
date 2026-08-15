@@ -61,3 +61,20 @@
     group: root
     mode: "0600"
   notify: Restart wireguard
+
+- name: Enable and start the tunnel
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wg_interface }}"
+    enabled: true
+    state: started
+
+# Handlers normally run at the END of the play. But the elasticsearch role (next)
+# needs the tunnel already up, so we force pending handlers to run NOW with flush_handlers.
+- name: Flush handlers so the tunnel is up before later roles use it
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify peer is reachable over the tunnel
+  ansible.builtin.command: "ping -c2 -W2 {{ hostvars[peer].wg_ip }}"
+  vars:
+    peer: "{{ groups['servers'] | difference([inventory_hostname]) | first }}"
+  changed_when: false
