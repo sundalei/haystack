@@ -1,3 +1,6 @@
 ---
 - name: Install elasticsearch packages
   ansible.builtin.import_tasks: install.yml
+
+- name: Configure certs
+  ansible.builtin.import_tasks: certs.yml

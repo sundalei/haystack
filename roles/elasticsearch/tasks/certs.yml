@@ -1,0 +1,69 @@
+---
+# Transport CA + per-node PEM certs. Generated once on the cert-authority node (es1),
+# then distributed to every node via es1's facts. Idemponent: skips generation if the
+# CA already exists.
+- name: Generate cluster certs on the authority node
+  when: es_cert_authority | default(false)
+  block:
+    # stat + "when not exists" is the idempotency guard for a multi-step generation
+    # that has no single `creates:` file. If the CA is already there, skip re-generating.
+    - name: Has the CA already been generated?
+      ansible.builtin.stat:
+        path: /root/es-ca/ca/ca.crt
+      register: ca_marker # noqa: var-naming[no-role-prefix]
+
+    - name: Build CA + node certs (first time only)
+      when: not ca_marker.stat.exists
+      block:
+        - name: Write instance.yml
+          ansible.builtin.copy:
+            dest: /root/es-instances.yml
+            mode: "0600"
+            content: |
+              instances:
+              {% for h in groups['servers'] %}
+                - name: {{ hostvars[h].es_node_name }}
+                  ip: ["{{ hostvars[h].wg_ip }}"]
+              {% endfor %}
+
+        - name: Create work directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: "0700"
+          loop: [/root/es-ca, /root/es-certs]
+
+        - name: Generate CA (PEM)
+          ansible.builtin.command:
+            cmd: /usr/share/elasticsearch/bin/elasticsearch-certutil ca --pem --silent --out /root/es-ca.zip
+            creates: /root/es-ca.zip
+
+        - name: Unpack ca
+          ansible.builtin.unarchive:
+            src: /root/es-ca.zip
+            dest: /root/es-ca
+            remote_src: true
+
+        - name: Generate per-node certs (PEM)
+          ansible.builtin.command:
+            cmd: >
+              /usr/share/elasticsearch/bin/elasticsearch-certutil cert --pem --silent
+              --in /root/es-instances.yml
+              --ca-cert /root/es-ca/ca/ca.crt --ca-key /root/es-ca/ca/ca.key
+              --out /root/es-certs.zip
+            creates: /root/es-certs.zip
+
+        - name: Unpack node certs
+          ansible.builtin.unarchive:
+            src: /root/es-certs.zip
+            dest: /root/es-certs
+            remote_src: true
+
+    - name: Read CA cert
+      ansible.builtin.slurp:
+        src: /root/es-ca/ca/ca.crt
+      register: ca_slurp # noqa: var-naming[no-role-prefix]
+
+    - name: Debug CA cert
+      ansible.builtin.debug:
+        var: ca_slurp
