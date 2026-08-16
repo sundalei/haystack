@@ -1,5 +1,7 @@
 ---
 # --- Non-secret configuration (secrets live in vault.yml) ---
+# Pin BOTH nodes to the exact same version
+elastic_stack_version: "9.4.4"
 
 # Admin user created on every host
 admin_user: "dalei"

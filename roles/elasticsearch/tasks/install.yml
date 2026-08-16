@@ -1,0 +1,65 @@
+---
+# Repo + pinned install. The version pin is what keeps both nodes identical.
+
+# --- RedHat / AlmaLinux ---
+- name: Import Elastic GPG key (RedHat)
+  ansible.builtin.rpm_key:
+    key: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Add Elastic yum repo (RedHat)
+  ansible.builtin.yum_repository:
+    name: elasticsearch
+    description: Elasticsearch repository for 9.x packages
+    baseurl: https://artifacts.elastic.co/packages/9.x/yum
+    gpgcheck: true
+    gpgkey: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    enabled: false # opt-in per install, Elastic's recommended safety setting
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'
+
+# the version is PINNED (elasticsearch-9.4.4)
+- name: Install Elasticsearch (RedHat, pinned)
+  ansible.builtin.dnf:
+    name: "elasticsearch-{{ elastic_stack_version }}"
+    enablerepo: elasticsearch
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'
+
+# --- Debian / Ubuntu ---
+- name: Install prerequisites (Debian)
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - gnupg
+    state: present
+    update_cache: true
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Install Elastic APT signing key (Debian)
+  ansible.builtin.get_url:
+    url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+    dest: /usr/share/keyrings/elasticsearch-keyring.asc
+    mode: "0644"
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Add Elastic APT repo (Debian)
+  ansible.builtin.deb822_repository:
+    name: elastic-9.x
+    types: deb
+    uris: https://artifacts.elastic.co/packages/9.x/apt
+    suites: stable
+    components: main
+    signed_by: /usr/share/keyrings/elasticsearch-keyring.asc
+    state: present
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Install Elasticsearch (Debian, pinned)
+  ansible.builtin.apt:
+    name: "elasticsearch={{ elastic_stack_version }}"
+    state: present
+    update_cache: true
+  when: ansible_facts['os_family'] == 'Debian'
+
+# Do NOT start yet - config + certs come first.
