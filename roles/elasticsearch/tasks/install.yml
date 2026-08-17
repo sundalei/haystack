@@ -30,9 +30,7 @@
 # --- Debian / Ubuntu ---
 - name: Install prerequisites (Debian)
   ansible.builtin.apt:
-    name:
-      - apt-transport-https
-      - gnupg
+    name: gnupg
     state: present
     update_cache: true
   when: ansible_facts['os_family'] == 'Debian'
@@ -60,6 +58,15 @@
     name: "elasticsearch={{ elastic_stack_version }}"
     state: present
     update_cache: true
+  when: ansible_facts['os_family'] == 'Debian'
+
+# The RedHat repo is added disabled, so the version pin can't drift. apt has no
+# per-install enablerepo, so hold the package instead to keep `apt upgrade` from
+# silently moving both nodes off the shared version.
+- name: Hold Elasticsearch version (Debian)
+  ansible.builtin.dpkg_selections:
+    name: elasticsearch
+    selection: hold
   when: ansible_facts['os_family'] == 'Debian'
 
 # Do NOT start yet - config + certs come first.

@@ -1,21 +1,46 @@
 ---
-# Transport CA + per-node PEM certs. Generated once on the cert-authority node (es1),
-# then distributed to every node via es1's facts. Idemponent: skips generation if the
-# CA already exists.
+# Transport + HTTP TLS: a CA and per-node PEM certs. Everything is generated once
+# on the cert-authority node (es1) and exposed as facts so every node can read them
+# via hostvars. The CA and the node certs are guarded separately, so a run that fails
+# after the CA (but before the certs) resumes cleanly instead of skipping both.
+
 - name: Generate cluster certs on the authority node
   when: es_cert_authority | default(false)
   block:
-    # stat + "when not exists" is the idempotency guard for a multi-step generation
-    # that has no single `creates:` file. If the CA is already there, skip re-generating.
-    - name: Has the CA already been generated?
+    - name: Check if the CA already exists
       ansible.builtin.stat:
         path: /root/es-ca/ca/ca.crt
       register: ca_marker # noqa: var-naming[no-role-prefix]
 
-    - name: Build CA + node certs (first time only)
+    - name: Check if the node certs already exist
+      ansible.builtin.stat:
+        path: /root/es-certs.zip
+      register: certs_marker # noqa: var-naming[no-role-prefix]
+
+    - name: Build the CA (first time only)
       when: not ca_marker.stat.exists
       block:
-        - name: Write instance.yml
+        - name: Create CA work directory
+          ansible.builtin.file:
+            path: /root/es-ca
+            state: directory
+            mode: "0700"
+
+        - name: Generate CA (PEM)
+          ansible.builtin.command:
+            cmd: /usr/share/elasticsearch/bin/elasticsearch-certutil ca --pem --silent --out /root/es-ca.zip
+            creates: /root/es-ca.zip
+
+        - name: Unpack CA
+          ansible.builtin.unarchive:
+            src: /root/es-ca.zip
+            dest: /root/es-ca
+            remote_src: true
+
+    - name: Build per-node certs (first time only)
+      when: not certs_marker.stat.exists
+      block:
+        - name: Write instances.yml
           ansible.builtin.copy:
             dest: /root/es-instances.yml
             mode: "0600"
@@ -23,26 +48,15 @@
               instances:
               {% for h in groups['servers'] %}
                 - name: {{ hostvars[h].es_node_name }}
-                  ip: ["{{ hostvars[h].wg_ip }}"]
+                  dns: ["{{ hostvars[h].es_node_name }}", "localhost"]
+                  ip: ["{{ hostvars[h].wg_ip }}", "127.0.0.1", "::1"]
               {% endfor %}
 
-        - name: Create work directories
+        - name: Create certs work directory
           ansible.builtin.file:
-            path: "{{ item }}"
+            path: /root/es-certs
             state: directory
             mode: "0700"
-          loop: [/root/es-ca, /root/es-certs]
-
-        - name: Generate CA (PEM)
-          ansible.builtin.command:
-            cmd: /usr/share/elasticsearch/bin/elasticsearch-certutil ca --pem --silent --out /root/es-ca.zip
-            creates: /root/es-ca.zip
-
-        - name: Unpack ca
-          ansible.builtin.unarchive:
-            src: /root/es-ca.zip
-            dest: /root/es-ca
-            remote_src: true
 
         - name: Generate per-node certs (PEM)
           ansible.builtin.command:
@@ -64,6 +78,44 @@
         src: /root/es-ca/ca/ca.crt
       register: ca_slurp # noqa: var-naming[no-role-prefix]
 
-    - name: Debug CA cert
-      ansible.builtin.debug:
-        var: ca_slurp
+    - name: Read each node's cert
+      ansible.builtin.slurp:
+        src: "/root/es-certs/{{ hostvars[node].es_node_name }}/{{ hostvars[node].es_node_name }}.crt"
+      loop: "{{ groups['servers'] }}"
+      loop_control:
+        loop_var: node
+      register: node_crt_slurp # noqa: var-naming[no-role-prefix]
+
+    - name: Read each node's key
+      ansible.builtin.slurp:
+        src: "/root/es-certs/{{ hostvars[node].es_node_name }}/{{ hostvars[node].es_node_name }}.key"
+      loop: "{{ groups['servers'] }}"
+      loop_control:
+        loop_var: node
+      register: node_key_slurp # noqa: var-naming[no-role-prefix]
+      no_log: true
+
+    # Keyed by inventory_hostname (== es_node_name today) so any node can fetch its
+    # own material with hostvars[ca_host].es_node_crt[inventory_hostname].
+    - name: Expose cert material as facts (shared to all nodes via hostvars) # noqa: var-naming[no-role-prefix]
+      ansible.builtin.set_fact:
+        es_ca_pem: "{{ ca_slurp.content | b64decode }}"
+        es_node_crt: >-
+          {{ dict(node_crt_slurp.results
+             | map(attribute='node')
+             | zip(node_crt_slurp.results | map(attribute='content') | map('b64decode'))) }}
+        es_node_key: >-
+          {{ dict(node_key_slurp.results
+             | map(attribute='node')
+             | zip(node_key_slurp.results | map(attribute='content') | map('b64decode'))) }}
+      no_log: true
+
+# --- Resolve which host generated the certs, so every node (authority or not) can
+#     read the shared facts via hostvars[ca_host] ---
+- name: Resolve the cert-authority host # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    ca_host: >-
+      {{ groups['servers'] | map('extract', hostvars)
+         | selectattr('es_cert_authority', 'defined')
+         | selectattr('es_cert_authority')
+         | map(attribute='inventory_hostname') | list | first }}
