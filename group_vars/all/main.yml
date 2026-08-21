@@ -3,6 +3,8 @@
 # Pin BOTH nodes to the exact same version
 elastic_stack_version: "9.4.4"
 
+cluster_name: "sundalei-es"
+
 # Admin user created on every host
 admin_user: "dalei"
 
@@ -10,3 +12,13 @@ admin_user: "dalei"
 wg_subnet_cidr: "10.10.0.0/24"
 wg_port: 51820
 wg_interface: "wg0"
+
+# Ports
+es_http_port: 9200
+es_transport_port: 9300
+
+# JVM heap per node
+es_heap: 1g
+
+# Where certs/keystores live (same path on rpm and deb installs)
+es_certs_dir: "/etc/elasticsearch/certs"

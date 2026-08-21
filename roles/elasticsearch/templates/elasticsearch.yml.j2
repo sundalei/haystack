@@ -1,0 +1,38 @@
+{# Managed by Ansible - do not edit by hand #}
+cluster.name: {{ cluster_name }}
+node.name: {{ es_node_name }}
+{% if es_node_roles is defined %}
+node.roles: {{ es_node_roles | to_json }}
+{% endif %}
+
+# Data / logs (must be present or ES writes to $ES_HOME and fails)
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+
+# HTTP on loopback (fronted by Apache); transport over the WireGuard tunnel.
+network.host: 127.0.0.1
+http.port: {{ es_http_port }}
+transport.host: {{ wg_ip }}
+transport.port: {{ es_transport_port }}
+
+# Discovery
+discovery.seed_hosts:
+{% for h in groups['servers'] %}
+  - "{{ hostvars[h].wg_ip }}:{{ es_transport_port }}"
+{% endfor %}
+{% if es_cert_authority | default(false) and not es_bootstrapped %}
+# ONLY the bootstrap node gets this, and it lists ONLY itself. Every other node is
+# a JOINER and must never see initial_master_nodes -- a node that has it forms its
+# own single-node cluster instead of joining, and two clusters can never be merged.
+# Disappears once service.yml writes /etc/elasticsearch/.cluster_bootstrapped.
+cluster.initial_master_nodes: ["{{ es_node_name }}"]
+{% endif %}
+
+# Security
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: false  # Apache terminates public TLS
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.key: certs/node.key
+xpack.security.transport.ssl.certificate: certs/node.crt
+xpack.security.transport.ssl.certificate_authorities: ["certs/ca.crt"]

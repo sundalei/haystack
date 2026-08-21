@@ -5,3 +5,4 @@ wg_public_endpoint: "31.97.136.158" # this node's PUBLIC ip (peer dials this)
 
 es_node_name: "es2"
 es_cert_authority: false
+es_node_roles: ["data", "ingest", "remote_cluster_client"]

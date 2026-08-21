@@ -1,0 +1,14 @@
+---
+# Kibana on es1. Connects to ES over loopback; Apache fronts it.
+- name: Install kibana (RedHat, pinned to the stack version)
+  ansible.builtin.dnf:
+    name: "kibana-{{ elastic_stack_version }}"
+    enablerepo: elasticsearch
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Install kibana (Debian, pinned)
+  ansible.builtin.apt:
+    name: "kibana={{ elastic_stack_version }}"
+    state: present
+  when: ansible_facts['os_family'] == 'Debian'

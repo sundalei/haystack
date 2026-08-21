@@ -11,3 +11,7 @@
 
     - role: elasticsearch
       tags: [elasticsearch, es, cluster]
+
+    - role: kibana
+      tags: [kibana]
+      when: run_kibana | default(false)

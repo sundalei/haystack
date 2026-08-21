@@ -4,3 +4,9 @@
 
 - name: Configure certs
   ansible.builtin.import_tasks: certs.yml
+
+- name: Setup configuration
+  ansible.builtin.import_tasks: config.yml
+
+- name: Start the cluster
+  ansible.builtin.import_tasks: service.yml

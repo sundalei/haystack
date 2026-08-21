@@ -1,0 +1,84 @@
+---
+# Start the cluster, wait for it to form, set kibana system, and mark bootstrap done.
+- name: Firewall - allow transport (9300) only from the peer's tunnel IP (RedHat)
+  ansible.posix.firewalld:
+    rich_rule: "rule family=ipv4 source address={{ hostvars[peer].wg_ip }}/32 port port={{ es_transport_port }} protocol=tcp accept"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ groups['servers'] | difference([inventory_hostname]) }}"
+  loop_control:
+    loop_var: peer
+    label: "{{ peer }} ({{ hostvars[peer].wg_ip }})"
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Firewall - allow transport (9300) only from the peer's tunnel IP (Debian)
+  community.general.ufw:
+    rule: allow
+    src: "{{ hostvars[peer].wg_ip }}"
+    port: "{{ es_transport_port }}"
+    proto: tcp
+  loop: "{{ groups['servers'] | difference([inventory_hostname]) }}"
+  loop_control:
+    loop_var: peer
+    label: "{{ peer }} ({{ hostvars[peer].wg_ip }})"
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Enable and start Elasticsearch
+  ansible.builtin.systemd:
+    name: elasticsearch
+    enabled: true
+    state: started
+
+- name: Apply any pending restarts (cert/config changes) now
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the HTTP port locally
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ es_http_port }}"
+    timeout: 180
+
+# `until:` + `retries/delay` polls until the condition holds - here, both nodes
+# joined and cluster isn't red.
+# `run_once` + `delegate_to` runs this check a single time, from es1, rather than once per host.
+# This is why the elasticsearch role must run against BOTH nodes together:
+# the check waits for number_of_nodes == 2.
+- name: Wait for the cluster to form (both nodes, not red)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ es_http_port }}/_cluster/health"
+    user: elastic
+    password: "{{ vault_elastic_password }}"
+    force_basic_auth: true
+    return_content: true
+  register: es_health # noqa: var-naming[no-role-prefix]
+  until:
+    - es_health.status == 200
+    - es_health.json.number_of_nodes == (groups['servers'] | length)
+    - es_health.json.status != 'red'
+  retries: 30
+  delay: 10
+  run_once: true
+  delegate_to: "{{ ca_host }}"
+  no_log: true
+
+- name: Set the kibana_system password
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ es_http_port }}/_security/user/kibana_system/_password"
+    method: POST
+    user: elastic
+    password: "{{ vault_elastic_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      password: "{{ vault_kibana_system_password }}"
+    status_code: 200
+  run_once: true
+  delegate_to: "{{ ca_host }}"
+  no_log: true
+
+- name: Mark this node as bootstrapped (drops initial_master_nodes on future runs)
+  ansible.builtin.file:
+    path: /etc/elasticsearch/.cluster_bootstrapped
+    state: touch
+    mode: "0644"

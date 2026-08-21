@@ -119,3 +119,39 @@
          | selectattr('es_cert_authority', 'defined')
          | selectattr('es_cert_authority')
          | map(attribute='inventory_hostname') | list | first }}
+
+- name: Ensure certs dir exists
+  ansible.builtin.file:
+    path: "{{ es_certs_dir }}"
+    state: directory
+    owner: root
+    group: elasticsearch
+    mode: "0750"
+
+- name: Install CA cert
+  ansible.builtin.copy:
+    dest: "{{ es_certs_dir }}/ca.crt"
+    content: "{{ hostvars[ca_host].es_ca_pem }}"
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+  notify: Restart elasticsearch
+
+- name: Install this node's cert
+  ansible.builtin.copy:
+    dest: "{{ es_certs_dir }}/node.crt"
+    content: "{{ hostvars[ca_host].es_node_crt[es_node_name] }}"
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+  notify: Restart elasticsearch
+
+- name: Install this node's key
+  ansible.builtin.copy:
+    dest: "{{ es_certs_dir }}/node.key"
+    content: "{{ hostvars[ca_host].es_node_key[es_node_name] }}"
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+  no_log: true
+  notify: Restart elasticsearch
