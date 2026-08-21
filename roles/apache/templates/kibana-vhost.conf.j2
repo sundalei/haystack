@@ -1,0 +1,41 @@
+{# Managed by Ansible — do not edit by hand #}
+<VirtualHost *:80>
+    ServerName {{ kibana_domain }}
+{% if tls_enabled %}
+    # Redirect all plain HTTP to HTTPS
+    RewriteEngine On
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [END,NE,R=permanent]
+{% else %}
+    # Pre-TLS: proxy over HTTP so certbot can validate the domain
+    ProxyPreserveHost On
+    ProxyRequests Off
+    ProxyTimeout 120
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*) ws://127.0.0.1:{{ kibana_port }}/$1 [P,L]
+    ProxyPass        / http://127.0.0.1:{{ kibana_port }}/
+    ProxyPassReverse / http://127.0.0.1:{{ kibana_port }}/
+{% endif %}
+</VirtualHost>
+{% if tls_enabled %}
+
+<VirtualHost *:443>
+    ServerName {{ kibana_domain }}
+
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/{{ kibana_domain }}/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/{{ kibana_domain }}/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+    ProxyTimeout 120
+
+    # WebSocket upgrade (only when the client requests it)
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*) ws://127.0.0.1:{{ kibana_port }}/$1 [P,L]
+
+    ProxyPass        / http://127.0.0.1:{{ kibana_port }}/
+    ProxyPassReverse / http://127.0.0.1:{{ kibana_port }}/
+</VirtualHost>
+{% endif %}

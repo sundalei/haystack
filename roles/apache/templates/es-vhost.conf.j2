@@ -1,0 +1,33 @@
+{# Managed by Ansible — do not edit by hand #}
+<VirtualHost *:80>
+    ServerName {{ es_domain }}
+{% if tls_enabled %}
+    # Redirect all plain HTTP to HTTPS
+    RewriteEngine On
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [END,NE,R=permanent]
+{% else %}
+    # Pre-TLS: proxy over HTTP so certbot can validate the domain
+    ProxyPreserveHost On
+    ProxyRequests Off
+    ProxyTimeout 120
+    ProxyPass        / http://127.0.0.1:{{ es_http_port }}/
+    ProxyPassReverse / http://127.0.0.1:{{ es_http_port }}/
+{% endif %}
+</VirtualHost>
+{% if tls_enabled %}
+
+<VirtualHost *:443>
+    ServerName {{ es_domain }}
+
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/{{ es_domain }}/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/{{ es_domain }}/privkey.pem
+
+    ProxyPreserveHost On
+    ProxyRequests Off
+    ProxyTimeout 120
+
+    ProxyPass        / http://127.0.0.1:{{ es_http_port }}/
+    ProxyPassReverse / http://127.0.0.1:{{ es_http_port }}/
+</VirtualHost>
+{% endif %}

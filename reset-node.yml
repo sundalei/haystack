@@ -1,0 +1,111 @@
+---
+# DESTRUCTIVE. Wipes one node's Elasticsearch state so it can rejoin the cluster as
+# a fresh node. Deliberately NOT imported by site.yml.
+#
+#   ansible-playbook reset-node.yml -l es2 -e es_confirm_wipe=es2
+#
+# The -e value must match the host being wiped, so a mistyped -l cannot take out
+# the wrong box. Wiping the cert-authority node additionally requires
+# -e es_confirm_ca_wipe=true.
+#
+# Why this exists: two independently bootstrapped clusters have different UUIDs and
+# can never be merged, whatever cluster.name says. Clearing path.data is the only
+# way to turn a self-bootstrapped node back into a joiner.
+#
+# Leaves the node STOPPED on purpose. Starting it before site.yml has rewritten
+# elasticsearch.yml would bootstrap from the stale config all over again.
+- name: Reset an Elasticsearch node to a clean state
+  hosts: servers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refuse to run without an explicit, matching confirmation
+      ansible.builtin.assert:
+        that:
+          - es_confirm_wipe is defined
+          - es_confirm_wipe == inventory_hostname
+        fail_msg: >-
+          Refusing to wipe {{ inventory_hostname }}. Re-run with
+          -e es_confirm_wipe={{ inventory_hostname }} if that is really the intent.
+        quiet: true
+
+    # Resetting the CA node destroys the cluster itself: every other node is a
+    # joiner with nothing to join. /root/es-ca survives (we do not touch it), so
+    # the CA and node certs are not lost -- but the cluster has to re-bootstrap
+    # and every other node needs resetting too.
+    - name: Require a second confirmation before wiping the cert-authority node
+      ansible.builtin.assert:
+        that:
+          - es_confirm_ca_wipe | default(false) | bool
+        fail_msg: >-
+          {{ inventory_hostname }} is the cert authority and the only bootstrap node.
+          Wiping it destroys the cluster and forces every other node to be reset too.
+          Add -e es_confirm_ca_wipe=true if that is really the intent.
+        quiet: true
+      when: es_cert_authority | default(false)
+
+    - name: Stop Elasticsearch
+      ansible.builtin.systemd:
+        name: elasticsearch
+        state: stopped
+
+    - name: Remove cluster state and data
+      ansible.builtin.file:
+        path: /var/lib/elasticsearch
+        state: absent
+
+    # Recreated here because nothing in the elasticsearch role does it -- the
+    # package created it at install time. A missing data directory fails at
+    # startup with AccessDeniedException: /var/lib/elasticsearch.
+    - name: Recreate an empty data directory
+      ansible.builtin.file:
+        path: /var/lib/elasticsearch
+        state: directory
+        owner: elasticsearch
+        group: elasticsearch
+        mode: "2750"
+
+    - name: Remove the bootstrap marker so the role re-evaluates
+      ansible.builtin.file:
+        path: /etc/elasticsearch/.cluster_bootstrapped
+        state: absent
+
+    # Security auto-configuration runs at package install and leaves PKCS#12
+    # material behind. We configure transport TLS with PEM key/cert instead, and
+    # leftover keystore SSL settings are a classic source of
+    # "Failed to load SSL configuration [xpack.security.transport.ssl]" at startup.
+    # node.crt / node.key / ca.crt are OURS -- they stay.
+    - name: Remove security auto-configuration certificates
+      ansible.builtin.file:
+        path: "{{ es_certs_dir }}/{{ item }}"
+        state: absent
+      loop:
+        - http.p12
+        - transport.p12
+        - http_ca.crt
+
+    - name: Read keystore settings
+      ansible.builtin.command: /usr/share/elasticsearch/bin/elasticsearch-keystore list
+      register: es_keystore_settings # noqa: var-naming[no-role-prefix]
+      changed_when: false
+
+    - name: Drop auto-configuration secure settings from the keystore
+      ansible.builtin.command:
+        argv:
+          - /usr/share/elasticsearch/bin/elasticsearch-keystore
+          - remove
+          - "{{ item }}"
+      loop:
+        - autoconfiguration.password_hash
+        - xpack.security.http.ssl.keystore.secure_password
+        - xpack.security.transport.ssl.keystore.secure_password
+        - xpack.security.transport.ssl.truststore.secure_password
+      when: item in es_keystore_settings.stdout_lines
+      changed_when: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} wiped and left STOPPED.
+          Run `ansible-playbook site.yml` to reconfigure and start it.
+          Do NOT start it by hand first.

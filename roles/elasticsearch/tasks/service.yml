@@ -77,8 +77,18 @@
   delegate_to: "{{ ca_host }}"
   no_log: true
 
+# Only reached once the health gate above has passed, so the marker means
+# "the full cluster formed", not merely "this play got this far".
+# `state: touch` defaults to stamping mtime/atime with the current time on every
+# run, which would report `changed` forever. preserve makes it a true no-op once
+# the file exists: created => changed, already present => ok. Nothing reads the
+# timestamp -- config.yml only asks stat whether the path exists.
 - name: Mark this node as bootstrapped (drops initial_master_nodes on future runs)
   ansible.builtin.file:
     path: /etc/elasticsearch/.cluster_bootstrapped
     state: touch
-    mode: "0644"
+    owner: root
+    group: elasticsearch
+    mode: "0640"
+    modification_time: preserve
+    access_time: preserve

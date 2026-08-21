@@ -1,5 +1,15 @@
 ---
+# throttle: 1 makes this a true rolling restart, not just a staggered command.
+# Elasticsearch's packaged unit is `Type=notify` with `NotifyAccess=all` and
+# `TimeoutStartSec=900`, so `systemctl restart` BLOCKS until the node signals
+# READY rather than returning as soon as the JVM is spawned. One host therefore
+# finishes coming up before the next one is touched.
+#
+# `serial: 1` on the play would be the textbook answer but is not available here:
+# certs.yml and wg0.conf.j2 both read hostvars from the other node, so every host
+# has to be in the same play.
 - name: Restart elasticsearch
   ansible.builtin.systemd:
     name: elasticsearch
     state: restarted
+  throttle: 1

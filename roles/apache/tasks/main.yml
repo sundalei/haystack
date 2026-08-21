@@ -1,0 +1,137 @@
+---
+# Apache httpd reverse proxy + Let's Encrypt on es1
+# Two-phase so it's idemponent: serve :80 -> obtain cert -> render TLS vhost. We own
+# the vhost file (certbot only authenticates, it does not edit our config).
+
+- name: Install Apache + mod_ssl
+  ansible.builtin.dnf:
+    name: [httpd, mod_ssl]
+    state: present
+
+# On RHEL-family with SELinux enforcing, httpd is blocked from opening network
+# connections by default — so the proxy to Kibana returns 503 until this boolean is set.
+- name: Allow httpd outbound connection (SELinux)
+  ansible.posix.seboolean:
+    name: httpd_can_network_connect
+    state: true
+    persistent: true
+  when: ansible_facts['selinux'].status | default('disabled') == 'enabled'
+
+- name: Open http/https (firewalld)
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: [http, https]
+
+- name: Install EPEL + certbot
+  ansible.builtin.dnf:
+    name: [epel-release]
+    state: present
+
+- name: Install certbot Apache plugin
+  ansible.builtin.dnf:
+    name: [certbot, python3-certbot-apache]
+    state: present
+
+# Phase 1: does the cert already exist?
+- name: Check for an existing certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ kibana_domain }}/fullchain.pem"
+  register: le_cert # noqa: var-naming[no-role-prefix]
+
+- name: Render vhost (plain :80 until the cert exists, TLS afterwards)
+  ansible.builtin.template:
+    src: kibana-vhost.conf.j2
+    dest: /etc/httpd/conf.d/kibana.conf
+    mode: "0644"
+  vars:
+    tls_enabled: "{{ le_cert.stat.exists }}"
+  notify: Reload httpd
+
+- name: Check for an existing ES certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ es_domain }}/fullchain.pem"
+  register: es_le_cert # noqa: var-naming[no-role-prefix]
+  when: expose_elasticsearch | default(false)
+
+- name: Render ES vhost (plain :80 until the cert exists, TLS afterwards)
+  ansible.builtin.template:
+    src: es-vhost.conf.j2
+    dest: /etc/httpd/conf.d/es.conf
+    mode: "0644"
+  vars:
+    tls_enabled: "{{ es_le_cert.stat.exists | default(false) }}"
+  when: expose_elasticsearch | default(false)
+  notify: Reload httpd
+
+- name: Enable and start httpd
+  ansible.builtin.systemd:
+    name: httpd
+    enabled: true
+    state: started
+
+- name: Apply vhost now
+  ansible.builtin.meta: flush_handlers
+
+# Phase 2: obtain the cert (once), then re-render with TLS
+# `certonly` obtains the cert but does NOT edit our vhost — we own that template, so
+# re-runs never fight certbot. `--apache` is only the validation method (it needs the :80
+# vhost from phase 1 answering). `creates:` makes it run once; renewals are handled by the
+# packaged certbot-renew timer.
+- name: Obtain the certificate (apache authenticator, config left to us)
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --apache
+      -d {{ kibana_domain }}
+      --non-interactive --agree-tos -m {{ certbot_email }}
+      --keep-until-expiring
+    creates: "/etc/letsencrypt/live/{{ kibana_domain }}/fullchain.pem"
+
+- name: Re-check the cert
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ kibana_domain }}/fullchain.pem"
+  register: le_cert2 # noqa: var-naming[no-role-prefix]
+
+- name: Render the TLS vhost
+  ansible.builtin.template:
+    src: kibana-vhost.conf.j2
+    dest: /etc/httpd/conf.d/kibana.conf
+    mode: "0644"
+  vars:
+    tls_enabled: "{{ le_cert2.stat.exists }}"
+  notify: Reload httpd
+
+- name: Obtain the ES certificate
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --apache
+      -d {{ es_domain }}
+      --non-interactive --agree-tos -m {{ certbot_email }}
+      --keep-until-expiring
+    creates: "/etc/letsencrypt/live/{{ es_domain }}/fullchain.pem"
+  when: expose_elasticsearch | default(false)
+
+- name: Re-check the ES cert
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ es_domain }}/fullchain.pem"
+  register: es_le_cert2 # noqa: var-naming[no-role-prefix]
+  when: expose_elasticsearch | default(false)
+
+- name: Render the ES TLS vhost
+  ansible.builtin.template:
+    src: es-vhost.conf.j2
+    dest: /etc/httpd/conf.d/es.conf
+    mode: "0644"
+  vars:
+    tls_enabled: "{{ es_le_cert2.stat.exists | default(false) }}"
+  when: expose_elasticsearch | default(false)
+  notify: Reload httpd
+
+- name: Ensure certbot renewal timer is running
+  ansible.builtin.systemd:
+    name: certbot-renew.timer
+    enabled: true
+    state: started
+  failed_when: false        # timer name varies by packaging; ignore if absent

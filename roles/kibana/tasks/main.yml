@@ -12,3 +12,36 @@
     name: "kibana={{ elastic_stack_version }}"
     state: present
   when: ansible_facts['os_family'] == 'Debian'
+
+- name: Render kibana.yml
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: /etc/kibana/kibana.yml
+    owner: root
+    group: kibana
+    mode: "0660"
+  notify: Restart kibana
+
+- name: Enable and start Kibana
+  ansible.builtin.systemd:
+    name: kibana
+    enabled: true
+    state: started
+
+- name: Apply pending restart if config changed
+  ansible.builtin.meta: flush_handlers
+
+# Kibana's first boot optimizes browser bundles and won't be "ready" until its
+# .kibana* indices are green — so we poll with generous retries rather than assuming it's
+# up the instant systemd returns. (If this hangs forever, the cluster isn't green.)
+- name: Wait for Kibana to answer locally (first boot is slow)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ kibana_port }}/api/status"
+    method: GET
+    status_code:
+      - 200
+      - 302
+  register: kb_status # noqa: var-naming[no-role-prefix]
+  until: kb_status.status in [200, 302]
+  retries: 40
+  delay: 15

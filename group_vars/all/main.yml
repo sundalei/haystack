@@ -16,9 +16,23 @@ wg_interface: "wg0"
 # Ports
 es_http_port: 9200
 es_transport_port: 9300
+kibana_port: 5601
 
 # JVM heap per node
 es_heap: 1g
+
+# Public hostnames - their A records must point at es2 (31.97.136.158), the host
+# that runs the apache role, BEFORE that role runs: certbot validates over port 80
+# against whatever the name resolves to.
+kibana_domain: "kibana.sundalei.cloud"
+es_domain: "es.sundalei.cloud"
+certbot_email: "sundalei@gmail.com"
+
+# Publishes es.sundalei.cloud -> ES HTTP on 9200. This exposes the ENTIRE
+# Elasticsearch API (including _security and index deletion) to the internet,
+# protected only by the elastic password. Set false to keep ES reachable only
+# via the tunnel and Kibana.
+expose_elasticsearch: true
 
 # Where certs/keystores live (same path on rpm and deb installs)
 es_certs_dir: "/etc/elasticsearch/certs"

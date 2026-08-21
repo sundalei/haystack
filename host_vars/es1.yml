@@ -1,7 +1,11 @@
 ---
-# es1 - AlmaLinux: cluster primary, hosts Kibana + Apache, and is the cert authority.
+# es1 - Debian family (apt). Cluster PRIMARY: sole master-eligible node (no
+# es_node_roles override => all roles) and the transport cert authority.
+# Runs no public services -- Kibana and Apache live on es2.
 wg_ip: "10.10.0.1"
 wg_public_endpoint: "187.77.1.89" # this node's PUBLIC ip (peer dials this)
 
 es_node_name: "es1"
 es_cert_authority: true # transport CA + all node certs are generated here
+run_kibana: false
+run_apache: false

@@ -1,0 +1,16 @@
+---
+# Tooling environment for this repo.
+#   conda env create -f environment.yml
+#   conda activate haystack
+#
+# `ansible` rather than `ansible-core`: the batteries-included package bundles
+# ansible.posix and community.general, so requirements.yml needs no galaxy step.
+# ansible-core >= 2.15 is required for ansible.builtin.deb822_repository.
+name: haystack
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - ansible>=11
+  - ansible-lint
+  - yamllint

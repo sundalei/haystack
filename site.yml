@@ -15,3 +15,7 @@
     - role: kibana
       tags: [kibana]
       when: run_kibana | default(false)
+
+    - role: apache
+      tags: [apache, proxy]
+      when: run_apache | default(false)

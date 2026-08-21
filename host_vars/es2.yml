@@ -1,8 +1,14 @@
 ---
-# es2 - Ubuntu: data node only.
+# es2 - RHEL family (dnf). Data node (master role deliberately omitted, so the
+# voting config stays at one node) AND the public web tier: Kibana and Apache
+# terminate TLS here, so kibana_domain / es_domain must resolve to THIS host.
+# The apache role is RHEL-only (dnf / httpd / firewalld / seboolean).
 wg_ip: "10.10.0.2"
 wg_public_endpoint: "31.97.136.158" # this node's PUBLIC ip (peer dials this)
 
 es_node_name: "es2"
 es_cert_authority: false
 es_node_roles: ["data", "ingest", "remote_cluster_client"]
+
+run_kibana: true
+run_apache: true

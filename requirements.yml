@@ -1,0 +1,14 @@
+---
+# Install with:
+#   ansible-galaxy collection install -r requirements.yml
+#
+# Also needs ansible-core >= 2.15 for ansible.builtin.deb822_repository
+# (used by the elasticsearch role on the Debian host).
+#
+# The `ansible` PyPI/conda package bundles both of these, so an environment built
+# from environment.yml needs no galaxy step.
+collections:
+  - name: ansible.posix
+    version: ">=1.5.4"        # firewalld, seboolean, sysctl, authorized_key
+  - name: community.general
+    version: ">=8.0.0"        # ufw
