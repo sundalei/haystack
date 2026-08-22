@@ -73,7 +73,7 @@
     state: started
   when: ansible_facts['os_family'] == 'RedHat'
 
-# `ufw enable` with a default-deny policy will cut your SSH session if 22 isn't already allowed.
+# `ufw enable` with a default-deny incoming policy will cut your SSH session if 22 isn't already allowed.
 # Always allow OpenSSH, then enable.
 - name: Allow SSH through ufw (Debian)
   community.general.ufw:
