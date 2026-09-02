@@ -1,0 +1,149 @@
+---
+# Two-phase so it is idempotent: serve :80 -> obtain cert -> render the TLS vhost.
+# We own the vhost file; certbot only authenticates and never edits our config.
+
+- name: Install Apache
+  ansible.builtin.package:
+    name: "{{ apache_packages }}"
+    state: present
+
+# Debian ships proxy/rewrite/ssl disabled. Skipped on RHEL, where the list is empty.
+- name: Enable required Apache modules (Debian)
+  community.general.apache2_module:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ apache_modules }}"
+  notify: Restart apache
+
+# On RHEL with SELinux enforcing, httpd may not open outbound sockets, so the
+# proxy to Kibana returns 503 until this boolean is set. Absent on Debian.
+- name: Allow httpd outbound connections (SELinux)
+  ansible.posix.seboolean:
+    name: httpd_can_network_connect
+    state: true
+    persistent: true
+  when:
+    - ansible_facts['os_family'] == 'RedHat'
+    - ansible_facts['selinux'].status | default('disabled') == 'enabled'
+
+- name: Open http/https (firewalld)
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: [http, https]
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Open http/https (ufw)
+  community.general.ufw:
+    rule: allow
+    name: "{{ item }}"
+  loop: ['Apache Full']
+  when: ansible_facts['os_family'] == 'Debian'
+
+# certbot's apache plugin lives in EPEL on the RHEL family.
+- name: Install EPEL (RedHat)
+  ansible.builtin.dnf:
+    name: epel-release
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Install certbot
+  ansible.builtin.package:
+    name: "{{ apache_certbot_packages }}"
+    state: present
+
+# --- phase 1: vhosts on :80 so certbot can validate ---------------------------
+- name: Check for existing certificates
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ item }}/fullchain.pem"
+  register: apache_certs # noqa: var-naming[no-role-prefix]
+  loop: "{{ apache_sites | map(attribute='domain') | list }}"
+
+- name: Render vhosts (plain :80 until the cert exists, TLS afterwards)
+  ansible.builtin.template:
+    src: "{{ item.template }}"
+    dest: "{{ apache_vhost_dir }}/{{ item.name }}.conf"
+    mode: "0644"
+  vars:
+    tls_enabled: "{{ apache_certs.results
+                     | selectattr('item', 'equalto', item.domain)
+                     | map(attribute='stat.exists') | first | default(false) }}"
+  loop: "{{ apache_sites }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.domain }})"
+  notify: Reload apache
+
+- name: Enable the sites (Debian)
+  ansible.builtin.command: "a2ensite {{ item.name }}"
+  args:
+    creates: "/etc/apache2/sites-enabled/{{ item.name }}.conf"
+  loop: "{{ apache_sites }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: apache_needs_site_enable
+  notify: Reload apache
+
+# Debian's default site answers on :80 for every unmatched Host, which shadows
+# nothing here but is noise on a box that only reverse-proxies.
+- name: Disable the default site (Debian)
+  ansible.builtin.command: a2dissite 000-default
+  args:
+    removes: /etc/apache2/sites-enabled/000-default.conf
+  when: apache_needs_site_enable
+  notify: Reload apache
+
+- name: Enable and start Apache
+  ansible.builtin.systemd:
+    name: "{{ apache_service }}"
+    enabled: true
+    state: started
+
+- name: Apply the vhosts now (certbot needs :80 answering)
+  ansible.builtin.meta: flush_handlers
+
+# --- phase 2: obtain certs, then re-render with TLS ---------------------------
+# `certonly` obtains the cert without touching our vhost. `--apache` is only the
+# validation method and needs the phase-1 vhost answering on :80. `creates:` makes
+# it run once; renewals are the packaged certbot timer's job.
+- name: Obtain certificates (apache authenticator, config left to us)
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --apache
+      -d {{ item.domain }}
+      --non-interactive --agree-tos -m {{ certbot_email }}
+      --keep-until-expiring
+    creates: "/etc/letsencrypt/live/{{ item.domain }}/fullchain.pem"
+  loop: "{{ apache_sites }}"
+  loop_control:
+    label: "{{ item.domain }}"
+
+- name: Re-check the certificates
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ item }}/fullchain.pem"
+  register: apache_certs2 # noqa: var-naming[no-role-prefix]
+  loop: "{{ apache_sites | map(attribute='domain') | list }}"
+
+- name: Render the TLS vhosts
+  ansible.builtin.template:
+    src: "{{ item.template }}"
+    dest: "{{ apache_vhost_dir }}/{{ item.name }}.conf"
+    mode: "0644"
+  vars:
+    tls_enabled: "{{ apache_certs2.results
+                     | selectattr('item', 'equalto', item.domain)
+                     | map(attribute='stat.exists') | first | default(false) }}"
+  loop: "{{ apache_sites }}"
+  loop_control:
+    label: "{{ item.name }} ({{ item.domain }})"
+  notify: Reload apache
+
+# The timer's unit name differs by packaging (RHEL: certbot-renew.timer,
+# Debian: certbot.timer) so it comes from vars/<os_family>.yml. certbot itself is
+# installed a few tasks above, so the unit is guaranteed to exist by now.
+- name: Ensure the certbot renewal timer is running
+  ansible.builtin.systemd:
+    name: "{{ apache_certbot_timer }}"
+    enabled: true
+    state: started
